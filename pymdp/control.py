@@ -377,7 +377,8 @@ def update_posterior_policies_factorized(
     pB=None,
     E=None,
     I=None,
-    gamma=16.0
+    gamma=16.0,
+    return_sub=False,
 ):
     """
     Update posterior beliefs about policies by computing expected free energy of each policy and integrating that
@@ -430,6 +431,8 @@ def update_posterior_policies_factorized(
         of reaching the goal state backwards from state j after i steps.
     gamma: float, default 16.0
         Prior precision over policies, scales the contribution of the expected free energy to the posterior over policies
+    return_sub: bool, default False
+        Whether to additionally return sub components of EFE
 
     Returns
     ----------
@@ -437,11 +440,19 @@ def update_posterior_policies_factorized(
         Posterior beliefs over policies, i.e. a vector containing one posterior probability per policy.
     G: 1D ``numpy.ndarray``
         Negative expected free energies of each policy, i.e. a vector containing one negative expected free energy per policy.
+    G_sub: ``dict`` of ``numpy.ndarray``
+        Dictionary of EFE subcomponents. Only provided if ``return_sub=True``
     """
 
     n_policies = len(policies)
-    G = np.zeros(n_policies)
     q_pi = np.zeros((n_policies, 1))
+    G_sub = {
+        "r": np.zeros(n_policies), 
+        "ig_s": np.zeros(n_policies), 
+        "ig_pA": np.zeros(n_policies),
+        "ig_pB": np.zeros(n_policies),
+        "r_I": np.zeros(n_policies),
+    }
 
     if E is None:
         lnE = spm_log_single(np.ones(n_policies) / n_policies)
@@ -453,24 +464,29 @@ def update_posterior_policies_factorized(
         qo_pi = get_expected_obs_factorized(qs_pi, A, A_factor_list)
 
         if use_utility:
-            G[idx] += calc_expected_utility(qo_pi, C)
+            G_sub["r"][idx] += calc_expected_utility(qo_pi, C)
 
         if use_states_info_gain:
-            G[idx] += calc_states_info_gain_factorized(A, qs_pi, A_factor_list)
+            G_sub["ig_s"][idx] += calc_states_info_gain_factorized(A, qs_pi, A_factor_list)
 
         if use_param_info_gain:
             if pA is not None:
-                G[idx] += calc_pA_info_gain_factorized(pA, qo_pi, qs_pi, A_factor_list)
+                G_sub["ig_pA"][idx] += calc_pA_info_gain_factorized(pA, qo_pi, qs_pi, A_factor_list)
             if pB is not None:
-                G[idx] += calc_pB_info_gain_interactions(pB, qs_pi, qs, B_factor_list, B_factor_control_list, policy)
+                G_sub["ig_pB"][idx] += calc_pB_info_gain_interactions(pB, qs_pi, qs, B_factor_list, B_factor_control_list, policy)
         
         if I is not None:
-            G[idx] += calc_inductive_cost(qs, qs_pi, I)
+            G_sub["r_I"][idx] += calc_inductive_cost(qs, qs_pi, I)
+    
+    G = np.stack(list(G_sub.values()), axis=1).sum(-1)
+    q_pi = softmax(G * gamma + lnE)
 
-    q_pi = softmax(G * gamma + lnE)    
-
-    return q_pi, G
-
+    G_sub["G"] = G    
+    if return_sub:
+        return q_pi, G, G_sub
+    else:
+        return q_pi, G
+    
 def get_expected_states(qs, B, policy):
     """
     Compute the expected states under a policy, also known as the posterior predictive density over states
@@ -1025,7 +1041,7 @@ def get_num_controls_from_policies(policies):
     return list(np.max(np.vstack(policies), axis = 0) + 1)
     
 
-def sample_action(q_pi, policies, num_controls, action_selection="deterministic", alpha = 16.0):
+def sample_action(q_pi, policies, num_controls, action_selection="deterministic", alpha = 16.0, return_marginals=False):
     """
     Computes the marginal posterior over actions and then samples an action from it, one action per control factor.
 
@@ -1045,11 +1061,16 @@ def sample_action(q_pi, policies, num_controls, action_selection="deterministic"
     alpha: ``float``, default 16.0
         Action selection precision -- the inverse temperature of the softmax that is used to scale the 
         action marginals before sampling. This is only used if ``action_selection`` argument is "stochastic"
-   
+    return_marginals: ``bool``, default False
+        Whether to additionally return the marginal action distribution
+
     Returns
     ----------
     selected_policy: 1D ``numpy.ndarray``
         Vector containing the indices of the actions for each control factor
+    action_marginals: ``numpy.ndarray`` of dtype object
+        Marginal posteriors over actions, after softmaxing and scaling with action precision. This distribution will be used to sample actions,
+        if``action_selection`` argument is "stochastic". Only provided if ``return_marginals=True``
     """
 
     num_factors = len(num_controls)
@@ -1073,8 +1094,11 @@ def sample_action(q_pi, policies, num_controls, action_selection="deterministic"
             log_marginal_f = spm_log_single(action_marginals[factor_i])
             p_actions = softmax(log_marginal_f * alpha)
             selected_policy[factor_i] = utils.sample(p_actions)
-
-    return selected_policy
+    
+    if return_marginals:
+        return selected_policy, action_marginals
+    else:
+        return selected_policy
 
 def _sample_action_test(q_pi, policies, num_controls, action_selection="deterministic", alpha = 16.0, seed=None):
     """

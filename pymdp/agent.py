@@ -676,7 +676,7 @@ class Agent(object):
         """
 
         if self.inference_algo == "VANILLA":
-            q_pi, G = control.update_posterior_policies_factorized(
+            q_pi, G, self.G_sub = control.update_posterior_policies_factorized(
                 self.qs,
                 self.A,
                 self.B,
@@ -692,7 +692,8 @@ class Agent(object):
                 self.pB,
                 E=self.E,
                 I=self.I,
-                gamma=self.gamma
+                gamma=self.gamma,
+                return_sub=True
             )
         elif self.inference_algo == "MMP":
 
@@ -742,12 +743,22 @@ class Agent(object):
         """
 
         if self.sampling_mode == "marginal":
-            action = control.sample_action(
-                self.q_pi, self.policies, self.num_controls, action_selection = self.action_selection, alpha = self.alpha
+            action, self.q_a = control.sample_action(
+                self.q_pi, 
+                self.policies, 
+                self.num_controls, 
+                action_selection=self.action_selection, 
+                alpha=self.alpha,
+                return_marginals=True,
             )
         elif self.sampling_mode == "full":
-            action = control.sample_policy(self.q_pi, self.policies, self.num_controls,
-                                           action_selection=self.action_selection, alpha=self.alpha)
+            action = control.sample_policy(
+                self.q_pi, 
+                self.policies, 
+                self.num_controls,
+                action_selection=self.action_selection, 
+                alpha=self.alpha,
+            )
 
         self.action = action
 
