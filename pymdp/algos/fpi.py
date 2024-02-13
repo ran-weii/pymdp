@@ -3,7 +3,7 @@
 # pylint: disable=no-member
 
 import numpy as np
-from pymdp.maths import spm_dot, dot_likelihood, get_joint_likelihood, softmax, calc_free_energy, spm_log_single, spm_log_obj_array
+from pymdp.maths import spm_dot, dot_likelihood, get_joint_likelihood, softmax, calc_free_energy, calc_free_energy_factorized, spm_log_single, spm_log_obj_array
 from pymdp.utils import to_obj_array, obj_array, obj_array_uniform
 from itertools import chain
 from copy import deepcopy
@@ -238,7 +238,7 @@ def run_vanilla_fpi_factorized(A, obs, num_obs, num_states, mb_dict, prior=None,
     =========== Step 3 ===========
         Initialize initial free energy
     """
-    prev_vfe = calc_free_energy(qs, prior, n_factors)
+    prev_vfe = calc_free_energy_factorized(qs, prior, n_factors)
 
     """
     =========== Step 4 ===========
@@ -263,25 +263,13 @@ def run_vanilla_fpi_factorized(A, obs, num_obs, num_states, mb_dict, prior=None,
 
         A_factor_list, A_modality_list = mb_dict['A_factor_list'], mb_dict['A_modality_list']
 
-        if compute_vfe:
-            joint_loglikelihood = np.zeros(tuple(num_states))
-            for m in range(n_modalities):
-                reshape_dims = n_factors*[1]
-                for _f_id in A_factor_list[m]:
-                    reshape_dims[_f_id] = num_states[_f_id]
-
-                joint_loglikelihood += log_likelihood[m].reshape(reshape_dims) # add up all the log-likelihoods after reshaping them to the global common dimensions of all hidden state factors
-
-        curr_iter = 0
-
         # change stop condition for fixed point iterations based on whether we are computing the variational free energy or not
         condition_check_both = lambda curr_iter, dF: curr_iter < num_iter and dF >= dF_tol
         condition_check_just_numiter = lambda curr_iter, dF: curr_iter < num_iter
         check_stop_condition = condition_check_both if compute_vfe else condition_check_just_numiter
 
+        curr_iter = 0
         while check_stop_condition(curr_iter, dF):
-            
-            # vfe = 0 
 
             qs_new = obj_array(n_factors)
             for f in range(n_factors):
@@ -304,14 +292,12 @@ def run_vanilla_fpi_factorized(A, obs, num_obs, num_states, mb_dict, prior=None,
             
             qs = deepcopy(qs_new)
             # print(f'Posteriors at iteration {curr_iter}:\n')
-            # print(qs[0])
-            # print(qs[1])
+
             # calculate new free energy, leaving out the accuracy term
-            # vfe += calc_free_energy(qs, prior, n_factors)
 
             if compute_vfe:
-                vfe = calc_free_energy(qs, prior, n_factors, likelihood=joint_loglikelihood)
-
+                vfe = calc_free_energy_factorized(qs, prior, n_factors, likelihood=log_likelihood, A_factor_list=A_factor_list)
+                
                 # print(f'VFE at iteration {curr_iter}: {vfe}\n')
                 # stopping condition - time derivative of free energy
                 dF = np.abs(prev_vfe - vfe)

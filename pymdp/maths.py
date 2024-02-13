@@ -372,6 +372,16 @@ def compute_accuracy(log_likelihood, qs):
 
     return np.einsum(*arg_list)
 
+def compute_accuracy_factorized(log_likelihood, qs, A_factor_list):
+    """
+    Function that computes the accuracy term of the variational free energy in a factorized mannor. 
+    The accuracy per each factor is summed up to obtain the joint accuracy.
+    """ 
+    ll = 0.
+    for f in range(len(log_likelihood)):
+        """NOTE: for some reason spm_dot does not give a scalar"""
+        ll += spm_dot_classic(log_likelihood[f], qs[A_factor_list[f]])
+    return ll
 
 def calc_free_energy(qs, prior, n_factors, likelihood=None):
     """ Calculate variational free energy
@@ -387,6 +397,23 @@ def calc_free_energy(qs, prior, n_factors, likelihood=None):
 
     if likelihood is not None:
         free_energy -= compute_accuracy(likelihood, qs)
+    return free_energy
+
+def calc_free_energy_factorized(qs, prior, n_factors, likelihood=None, A_factor_list=None,):
+    """ Calculate variational free energy by computing accuracy factorized 
+    @TODO Primarily used in FPI algorithm, needs to be made general
+    """
+    free_energy = 0
+    for factor in range(n_factors):
+        # Neg-entropy of posterior marginal H(q[f])
+        negH_qs = qs[factor].dot(np.log(qs[factor][:, np.newaxis] + 1e-16))
+        # Cross entropy of posterior marginal with prior marginal H(q[f],p[f])
+        xH_qp = -qs[factor].dot(prior[factor][:, np.newaxis])
+        free_energy += negH_qs + xH_qp
+    
+    if likelihood is not None:
+        assert A_factor_list is not None, "Must enter A_factor_list to compute accuracy factorized"
+        free_energy -= compute_accuracy_factorized(likelihood, qs, A_factor_list)
     return free_energy
 
 def spm_calc_qo_entropy(A, x):
