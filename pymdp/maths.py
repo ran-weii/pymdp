@@ -41,7 +41,9 @@ def spm_dot(X, x, dims_to_omit=None):
         x = utils.to_obj_array(x)
 
     if dims_to_omit is not None:
-        arg_list = [X, list(range(X.ndim))] + list(chain(*([x[xdim_i],[dims[xdim_i]]] for xdim_i in range(len(x)) if xdim_i not in dims_to_omit))) + [dims_to_omit]
+        # arg_list = [X, list(range(X.ndim))] + list(chain(*([x[xdim_i],[dims[xdim_i]]] for xdim_i in range(len(x)) if xdim_i not in dims_to_omit))) + [dims_to_omit]
+        """TODO: not sure if this is correct, need to ask conor"""
+        arg_list = [X, list(range(X.ndim))] + list(chain(*([x[xdim_i],[dims[xdim_i]]] for xdim_i in range(len(x)) if dims[xdim_i] not in dims_to_omit))) + [dims_to_omit]
     else:
         arg_list = [X, list(range(X.ndim))] + list(chain(*([x[xdim_i],[dims[xdim_i]]] for xdim_i in range(len(x))))) + [[0]]
 
