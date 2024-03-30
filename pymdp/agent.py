@@ -54,6 +54,8 @@ class Agent(object):
         action_selection="deterministic",
         sampling_mode = "marginal", # whether to sample from full posterior over policies ("full") or from marginal posterior over actions ("marginal")
         inference_algo="VANILLA",
+        control_algo="VANILLA",
+        control_iters=10,
         inference_params=None,
         modalities_to_learn="all",
         lr_pA=1.0,
@@ -195,18 +197,6 @@ class Agent(object):
 
             for factor_idx in self.control_fac_idx:
                 assert any([self.num_controls[i] > 1 for i in self.B_factor_control_list[factor_idx]]), "B matrix for user-given control_fac_idx must have at least one controllable dimension"
-        
-        # Again, the use can specify a set of possible policies, or
-        # all possible combinations of actions and timesteps will be considered
-        if policies == None:
-            policies = self._construct_policies()
-        self.policies = policies
-
-        assert all([len(self.num_controls) == policy.shape[1] for policy in self.policies]), "Number of control states is not consistent with policy dimensionalities"
-        
-        all_policies = np.vstack(self.policies)
-
-        assert all([n_c >= max_action for (n_c, max_action) in zip(self.num_controls, list(np.max(all_policies, axis =0)+1))]), "Maximum number of actions is not consistent with `num_controls`"
 
         # Construct prior preferences (uniform if not specified)
 
@@ -246,26 +236,7 @@ class Agent(object):
         assert utils.is_normalized(self.D), "D vector is not normalized (i.e. D[f].sum() must all equal 1.0 for all factors)"
 
         # Assigning prior parameters on initial hidden states (pD vectors)
-        self.pD = pD
-
-        # Construct prior over policies (uniform if not specified) 
-        if E is not None:
-            if not isinstance(E, np.ndarray):
-                raise TypeError(
-                    'E vector must be a numpy array'
-                )
-            self.E = E
-
-            assert len(self.E) == len(self.policies), f"Check E vector: length of E must be equal to number of policies: {len(self.policies)}"
-
-        else:
-            self.E = self._construct_E_prior()
-        
-        # Construct I for backwards induction (if H specified)
-        if H is not None:
-            self.I = control.backwards_induction(H, B, B_factor_list, threshold=1/16, depth=5)
-        else:
-            self.I = None
+        self.pD = pD 
 
         self.edge_handling_params = {}
         self.edge_handling_params['use_BMA'] = use_BMA # creates a 'D-like' moving prior
@@ -280,6 +251,7 @@ class Agent(object):
                 )
                 self.edge_handling_params['use_BMA'] = False
         
+        # init inference algo params
         if inference_algo == None:
             self.inference_algo = "VANILLA"
             self.inference_params = self._get_default_params()
@@ -291,10 +263,49 @@ class Agent(object):
                 self.inference_horizon = 1
             else:
                 self.inference_horizon = 1
+            
+            self.control_algo = control_algo
+            self.control_iters = control_iters
         else:
             self.inference_algo = inference_algo
             self.inference_params = self._get_default_params()
             self.inference_horizon = inference_horizon
+            self.control_algo = inference_algo
+        
+        # init control algo params
+        if self.control_algo == "REPS":
+            self.sampling_mode = "REPS"
+        else:
+            # Again, the use can specify a set of possible policies, or
+            # all possible combinations of actions and timesteps will be considered
+            if policies == None:
+                policies = self._construct_policies()
+            self.policies = policies
+
+            assert all([len(self.num_controls) == policy.shape[1] for policy in self.policies]), "Number of control states is not consistent with policy dimensionalities"
+            
+            all_policies = np.vstack(self.policies)
+
+            assert all([n_c >= max_action for (n_c, max_action) in zip(self.num_controls, list(np.max(all_policies, axis =0)+1))]), "Maximum number of actions is not consistent with `num_controls`"
+            
+            # Construct prior over policies (uniform if not specified) 
+            if E is not None:
+                if not isinstance(E, np.ndarray):
+                    raise TypeError(
+                        'E vector must be a numpy array'
+                    )
+                self.E = E
+
+                assert len(self.E) == len(self.policies), f"Check E vector: length of E must be equal to number of policies: {len(self.policies)}"
+
+            else:
+                self.E = self._construct_E_prior()
+            
+            # Construct I for backwards induction (if H specified)
+            if H is not None:
+                self.I = control.backwards_induction(H, B, B_factor_list, threshold=1/16, depth=5)
+            else:
+                self.I = None
 
         if save_belief_hist:
             self.qs_hist = []
@@ -675,7 +686,7 @@ class Agent(object):
             Negative expected free energies of each policy, i.e. a vector containing one negative expected free energy per policy.
         """
 
-        if self.inference_algo == "VANILLA":
+        if self.control_algo == "VANILLA":
             q_pi, G, self.G_sub = control.update_posterior_policies_factorized(
                 self.qs,
                 self.A,
@@ -695,7 +706,7 @@ class Agent(object):
                 gamma=self.gamma,
                 return_sub=True
             )
-        elif self.inference_algo == "MMP":
+        elif self.control_algo == "MMP":
 
             future_qs_seq = self.get_future_qs()
 
@@ -718,6 +729,26 @@ class Agent(object):
                 I=self.I,
                 gamma=self.gamma
             )
+        elif self.control_algo == "REPS":
+            q_pi, G = control.relative_entropy_policy_search(
+                self.qs,
+                self.A,
+                self.B,
+                self.C,
+                self.A_factor_list,
+                self.B_factor_list,
+                self.B_factor_control_list,
+                self.num_states,
+                self.num_controls,
+                self.policy_len,
+                self.use_utility,
+                self.use_states_info_gain,
+                self.use_param_info_gain,
+                self.pA,
+                self.pB,
+                gamma=self.gamma,
+                iters=self.control_iters,
+            )            
 
         if hasattr(self, "q_pi_hist"):
             self.q_pi_hist.append(q_pi)
@@ -759,6 +790,8 @@ class Agent(object):
                 action_selection=self.action_selection, 
                 alpha=self.alpha,
             )
+        elif self.sampling_mode == "REPS":
+            action = np.array([utils.sample(self.q_pi[i]) for i in range(len(self.num_controls))])
 
         self.action = action
 
